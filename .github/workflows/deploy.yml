@@ -1,0 +1,77 @@
+name: Deploy FastAPI to EC2 (ECR)
+
+on:
+  push:
+    branches:
+      - main
+
+env:
+  AWS_REGION: us-east-1
+  ECR_REPOSITORY: ai-chatbot
+  IMAGE_TAG: latest
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      # 1. Checkout code
+      - name: Checkout
+        uses: actions/checkout@v3
+
+      # 2. Configure AWS
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v2
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_KEY }}
+          aws-region: us-east-1
+
+      # 3. Login to ECR
+      - name: Login to ECR
+        run: |
+          aws ecr get-login-password --region us-east-1 \
+          | docker login --username AWS \
+          --password-stdin ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.us-east-1.amazonaws.com
+
+      # 4. Build Docker image
+      - name: Build Image
+        run: docker build -t $ECR_REPOSITORY:$IMAGE_TAG .
+
+      # 5. Tag Image
+      - name: Tag Image
+        run: |
+          docker tag $ECR_REPOSITORY:$IMAGE_TAG \
+          ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.us-east-1.amazonaws.com/$ECR_REPOSITORY:$IMAGE_TAG
+
+      # 6. Push to ECR
+      - name: Push Image
+        run: |
+          docker push ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.us-east-1.amazonaws.com/$ECR_REPOSITORY:$IMAGE_TAG
+
+      # 7. SSH into EC2 and Deploy
+      - name: Deploy to EC2
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.EC2_HOST }}
+          username: ubuntu
+          key: ${{ secrets.EC2_SSH_KEY }}
+          script: |
+            # Stop old container
+            docker stop chatbot || true
+            docker rm chatbot || true
+
+            # Login to ECR from EC2
+            aws ecr get-login-password --region us-east-1 \
+            | docker login --username AWS \
+            --password-stdin ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.us-east-1.amazonaws.com
+
+            # Pull latest image
+            docker pull ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.us-east-1.amazonaws.com/$ECR_REPOSITORY:$IMAGE_TAG
+
+            # Run new container
+            docker run -d -p 8000:8000 \
+              --name chatbot \
+              --restart always \
+              -e OPENAI_API_KEY=${{ secrets.OPENAI_API_KEY }} \
+              ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.us-east-1.amazonaws.com/$ECR_REPOSITORY:$IMAGE_TAG
