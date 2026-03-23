@@ -150,6 +150,6 @@ docker restart chatbot
 ---
 
 
-## 🙌 Author
+## Author
 
 Jayachandra
